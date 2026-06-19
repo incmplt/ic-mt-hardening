@@ -49,6 +49,8 @@ ic-mt-hardening /path/to/mt --perl-bin /usr/bin/perl -o report.md
 - `themes/` 配下のテーマ検出
 - ローカル JSON DB によるプラグイン/テーマ脆弱性マッチング
 - NVD API による CVE 検索（明示指定時のみ）
+- MT ルートまたは `--document-root` で指定した DocumentRoot 内の危険ファイル検出
+- `.env`、`.git/config`、`readme.html`、`.sql`、`.zip`、`.bak`、`wp-config.php~`、`debug.log` などの検出
 - CGI ファイル、`mt-config.cgi`、`.env`、ツリー内 world-writable パスのパーミッション検査
 - Perl 実行環境の確認
 
@@ -115,6 +117,35 @@ ic-mt-hardening /path/to/mt --format json -o report.json
 ```
 
 JSON には `summary` と `findings` が含まれます。各 finding には `check`, `status`, `message`, `detail`, `path`, `remediation`, `evidence`, `source` が入ります。
+
+## DocumentRoot の危険ファイル検出
+
+Movable Type ルート配下に残されたバックアップ、アーカイブ、デバッグログ、データベースダンプ、設定ファイルのバックアップを検出します。
+
+Movable Type が DocumentRoot 直下ではなく、`/var/www/html/hogehoge/mt/` のようなサブディレクトリにインストールされている場合は、`--document-root` を指定すると DocumentRoot 全体を検査できます。
+
+```bash
+ic-mt-hardening /var/www/html/hogehoge/mt --document-root /var/www/html -o report.md
+```
+
+例:
+
+- `.env`
+- `.git/config`
+- `readme.html`
+- `debug.log`
+- `*.sql`
+- `*.zip`
+- `*.bak`
+- `*~`
+- `mt-config.cgi.bak`
+- `wp-config.php~`
+
+レポートに表示するパス数は変更できます。
+
+```bash
+ic-mt-hardening /path/to/mt --max-dangerous-file-findings 50 -o report.md
+```
 
 ## 脆弱性 DB
 

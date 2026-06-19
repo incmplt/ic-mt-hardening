@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import fnmatch
 import json
 import os
 import re
@@ -53,9 +54,62 @@ class CveTarget:
     path: str = ""
 
 
+@dataclass(frozen=True)
+class DangerousFileRule:
+    pattern: str
+    status: str
+    reason: str
+
+
+DANGEROUS_FILE_RULES = (
+    DangerousFileRule("mt-config.cgi~", "FAIL", "Movable Type config backup"),
+    DangerousFileRule("mt-config.cgi.bak", "FAIL", "Movable Type config backup"),
+    DangerousFileRule("mt-config.cgi.old", "FAIL", "Movable Type config backup"),
+    DangerousFileRule("mt-config.cgi.orig", "FAIL", "Movable Type config backup"),
+    DangerousFileRule("mt-config.cgi.save", "FAIL", "Movable Type config backup"),
+    DangerousFileRule(".env~", "FAIL", "environment file backup"),
+    DangerousFileRule(".env.bak", "FAIL", "environment file backup"),
+    DangerousFileRule(".env.old", "FAIL", "environment file backup"),
+    DangerousFileRule(".env.orig", "FAIL", "environment file backup"),
+    DangerousFileRule(".env.save", "FAIL", "environment file backup"),
+    DangerousFileRule(".env", "FAIL", "environment file"),
+    DangerousFileRule("wp-config.php~", "FAIL", "WordPress config backup"),
+    DangerousFileRule("wp-config.php.bak", "FAIL", "WordPress config backup"),
+    DangerousFileRule("wp-config.php.old", "FAIL", "WordPress config backup"),
+    DangerousFileRule("wp-config.php.orig", "FAIL", "WordPress config backup"),
+    DangerousFileRule("wp-config.php.save", "FAIL", "WordPress config backup"),
+    DangerousFileRule(".git/config", "FAIL", "Git metadata"),
+    DangerousFileRule("*/.git/config", "FAIL", "Git metadata"),
+    DangerousFileRule(".svn/entries", "FAIL", "Subversion metadata"),
+    DangerousFileRule("*/.svn/entries", "FAIL", "Subversion metadata"),
+    DangerousFileRule(".hg/hgrc", "FAIL", "Mercurial metadata"),
+    DangerousFileRule("*/.hg/hgrc", "FAIL", "Mercurial metadata"),
+    DangerousFileRule("*.sql", "FAIL", "database dump"),
+    DangerousFileRule("*.sql.gz", "FAIL", "compressed database dump"),
+    DangerousFileRule("*.sql.zip", "FAIL", "compressed database dump"),
+    DangerousFileRule("readme.html", "WARN", "public documentation file"),
+    DangerousFileRule("debug.log", "WARN", "debug log"),
+    DangerousFileRule("error_log", "WARN", "web server error log"),
+    DangerousFileRule("*.zip", "WARN", "archive file"),
+    DangerousFileRule("*.tar", "WARN", "archive file"),
+    DangerousFileRule("*.tar.gz", "WARN", "archive file"),
+    DangerousFileRule("*.tgz", "WARN", "archive file"),
+    DangerousFileRule("*.7z", "WARN", "archive file"),
+    DangerousFileRule("*.rar", "WARN", "archive file"),
+    DangerousFileRule("*.bak", "WARN", "backup file"),
+    DangerousFileRule("*.old", "WARN", "backup file"),
+    DangerousFileRule("*.orig", "WARN", "backup file"),
+    DangerousFileRule("*.save", "WARN", "backup file"),
+    DangerousFileRule("*~", "WARN", "editor backup file"),
+    DangerousFileRule("*.swp", "WARN", "editor swap file"),
+    DangerousFileRule("*.tmp", "WARN", "temporary file"),
+)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     root = args.mt_root.resolve()
+    document_root = args.document_root.resolve() if args.document_root else root
     load_env_files(root)
 
     findings: list[Finding] = []
@@ -95,6 +149,13 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     findings.extend(check_cgi_permissions(root))
+    findings.extend(
+        check_dangerous_files(
+            scan_root=document_root,
+            max_findings=args.max_dangerous_file_findings,
+            mt_root=root,
+        )
+    )
     findings.extend(check_permissions(root, config_path, args.max_permission_findings))
     findings.extend(check_perl_runtime(args.perl_bin, args.timeout))
 
@@ -110,6 +171,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("mt_root", type=Path, help="Path to the Movable Type application root.")
     parser.add_argument("-o", "--output", type=Path, help="Write report to this file.")
+    parser.add_argument(
+        "--document-root",
+        type=Path,
+        help=(
+            "Path to the web server DocumentRoot for dangerous-file checks. "
+            "Defaults to the Movable Type root."
+        ),
+    )
     parser.add_argument(
         "--format",
         choices=("markdown", "json"),
@@ -168,6 +237,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=25,
         help="Maximum individual permission paths shown in the report. Default: 25.",
+    )
+    parser.add_argument(
+        "--max-dangerous-file-findings",
+        type=int,
+        default=25,
+        help="Maximum dangerous file paths shown in the report. Default: 25.",
     )
     parser.add_argument(
         "--fail-on",
@@ -993,6 +1068,127 @@ def check_cgi_permissions(root: Path) -> list[Finding]:
         else:
             findings.append(Finding("cgi-permissions", "PASS", f"{path.name} mode is {mode_text}.", path=str(path)))
     return findings
+
+
+def check_dangerous_files(scan_root: Path, max_findings: int, mt_root: Path | None = None) -> list[Finding]:
+    if not scan_root.exists():
+        return [
+            Finding(
+                "dangerous-files",
+                "WARN",
+                "Dangerous file scan root does not exist.",
+                path=str(scan_root),
+            )
+        ]
+    if not scan_root.is_dir():
+        return [
+            Finding(
+                "dangerous-files",
+                "WARN",
+                "Dangerous file scan root is not a directory.",
+                path=str(scan_root),
+            )
+        ]
+
+    limit = max(max_findings, 0)
+    matches: dict[str, list[str]] = {"FAIL": [], "WARN": []}
+    counts: dict[str, int] = {"FAIL": 0, "WARN": 0}
+
+    for path in scan_root.rglob("*"):
+        try:
+            if not (path.is_file() or path.is_symlink()):
+                continue
+        except OSError:
+            continue
+
+        try:
+            relative_path = path.relative_to(scan_root).as_posix()
+        except ValueError:
+            continue
+        rule = match_dangerous_file(relative_path)
+        if rule is None:
+            continue
+        counts[rule.status] += 1
+        if len(matches[rule.status]) < limit:
+            matches[rule.status].append(f"{relative_path} ({rule.reason})")
+
+    findings: list[Finding] = []
+    if counts["FAIL"]:
+        detail = render_dangerous_file_detail(matches["FAIL"], counts["FAIL"])
+        findings.append(
+            Finding(
+                "dangerous-files",
+                "FAIL",
+                "Potentially sensitive files were found in the web-accessible tree.",
+                detail,
+                path=str(scan_root),
+                remediation=(
+                    "Remove these files from the web-accessible tree or move "
+                    "them outside the document root."
+                ),
+            )
+        )
+    if counts["WARN"]:
+        detail = render_dangerous_file_detail(matches["WARN"], counts["WARN"])
+        findings.append(
+            Finding(
+                "dangerous-files",
+                "WARN",
+                "Backup, archive, debug, or temporary files were found.",
+                detail,
+                path=str(scan_root),
+                remediation=(
+                    "Confirm these files are not publicly accessible, or remove them from "
+                    "the document root."
+                ),
+            )
+        )
+    if findings:
+        if mt_root is not None and scan_root != mt_root:
+            findings.append(
+                Finding(
+                    "dangerous-files",
+                    "INFO",
+                    "Dangerous file scan used a separate DocumentRoot.",
+                    f"DocumentRoot: {scan_root}\nMovable Type root: {mt_root}",
+                    path=str(scan_root),
+                )
+            )
+        return findings
+    message = "No dangerous backup, archive, debug, or temporary files were found."
+    detail = ""
+    if mt_root is not None and scan_root != mt_root:
+        detail = f"DocumentRoot: {scan_root}\nMovable Type root: {mt_root}"
+    return [
+        Finding(
+            "dangerous-files",
+            "PASS",
+            message,
+            detail,
+            path=str(scan_root),
+        )
+    ]
+
+
+def render_dangerous_file_detail(paths: list[str], total_count: int) -> str:
+    lines = list(paths)
+    omitted = total_count - len(paths)
+    if omitted > 0:
+        lines.append(
+            f"{omitted} additional match(es) omitted; increase --max-dangerous-file-findings."
+        )
+    return "\n".join(lines)
+
+
+def match_dangerous_file(relative_path: str) -> DangerousFileRule | None:
+    normalized = relative_path.replace("\\", "/").lower()
+    name = normalized.rsplit("/", 1)[-1]
+    for rule in DANGEROUS_FILE_RULES:
+        pattern = rule.pattern.lower()
+        target = normalized if "/" in pattern else name
+        if fnmatch.fnmatchcase(target, pattern):
+            return rule
+    return None
 
 
 def check_permissions(

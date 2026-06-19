@@ -49,6 +49,8 @@ ic-mt-hardening /path/to/mt --perl-bin /usr/bin/perl -o report.md
 - Theme detection under `themes/`
 - Plugin/theme vulnerability matching with a local JSON database
 - CVE search through the NVD API when explicitly enabled
+- Dangerous file detection under the MT root or the DocumentRoot passed with `--document-root`
+- Detection for files such as `.env`, `.git/config`, `readme.html`, `.sql`, `.zip`, `.bak`, `wp-config.php~`, and `debug.log`
 - Permission checks for CGI files, `mt-config.cgi`, `.env`, and world-writable paths
 - Perl runtime check
 
@@ -115,6 +117,35 @@ ic-mt-hardening /path/to/mt --format json -o report.json
 ```
 
 The JSON report contains `summary` and `findings`. Each finding includes `check`, `status`, `message`, `detail`, `path`, `remediation`, `evidence`, and `source`.
+
+## DocumentRoot Dangerous File Detection
+
+The tool detects backup files, archives, debug logs, database dumps, and configuration backups left under the Movable Type root.
+
+If Movable Type is installed below the DocumentRoot, such as `/var/www/html/hogehoge/mt/`, pass `--document-root` to scan the whole DocumentRoot.
+
+```bash
+ic-mt-hardening /var/www/html/hogehoge/mt --document-root /var/www/html -o report.md
+```
+
+Examples:
+
+- `.env`
+- `.git/config`
+- `readme.html`
+- `debug.log`
+- `*.sql`
+- `*.zip`
+- `*.bak`
+- `*~`
+- `mt-config.cgi.bak`
+- `wp-config.php~`
+
+You can change the number of paths shown in the report.
+
+```bash
+ic-mt-hardening /path/to/mt --max-dangerous-file-findings 50 -o report.md
+```
 
 ## Vulnerability Database
 

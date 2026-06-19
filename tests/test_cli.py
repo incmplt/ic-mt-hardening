@@ -39,6 +39,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("themes", checks)
         self.assertIn("theme-inventory", checks)
         self.assertIn("cgi-permissions", checks)
+        self.assertIn("dangerous-files", checks)
         self.assertIn("permissions", checks)
 
     def test_config_checks_warn_for_http_default_admin_and_debug_mode(self) -> None:
@@ -110,6 +111,99 @@ class CliTests(unittest.TestCase):
                 finding["check"] == "vulnerability"
                 and finding["status"] == "FAIL"
                 and "Stored XSS" in finding["message"]
+                for finding in findings
+            )
+        )
+
+    def test_dangerous_files_report_sensitive_backups_and_debug_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_movable_type_fixture(Path(tmp))
+            (root / "backup.sql").write_text("-- dump\n", encoding="utf-8")
+            (root / "debug.log").write_text("debug output\n", encoding="utf-8")
+            (root / "wp-config.php~").write_text("<?php\n", encoding="utf-8")
+            (root / "readme.html").write_text("<h1>Readme</h1>\n", encoding="utf-8")
+
+            output = run_cli_capture(
+                [
+                    str(root),
+                    "--format",
+                    "json",
+                    "--perl-bin",
+                    "missing-perl-for-test",
+                    "--fail-on",
+                    "never",
+                ]
+            )
+
+        report = json.loads(output)
+        findings = [
+            finding for finding in report["findings"] if finding["check"] == "dangerous-files"
+        ]
+        self.assertTrue(
+            any(
+                finding["status"] == "FAIL"
+                and "backup.sql" in finding["detail"]
+                and "wp-config.php~" in finding["detail"]
+                for finding in findings
+            )
+        )
+        self.assertTrue(
+            any(
+                finding["status"] == "WARN"
+                and "debug.log" in finding["detail"]
+                and "readme.html" in finding["detail"]
+                for finding in findings
+            )
+        )
+
+    def test_dangerous_files_can_scan_document_root_above_mt_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            document_root = Path(tmp) / "html"
+            mt_parent = document_root / "hogehoge"
+            root = make_movable_type_fixture(mt_parent)
+            (document_root / "backup.sql").write_text("-- dump\n", encoding="utf-8")
+            (document_root / ".git").mkdir()
+            (document_root / ".git" / "config").write_text("[core]\n", encoding="utf-8")
+            (document_root / "debug.log").write_text("debug output\n", encoding="utf-8")
+
+            output = run_cli_capture(
+                [
+                    str(root),
+                    "--document-root",
+                    str(document_root),
+                    "--format",
+                    "json",
+                    "--perl-bin",
+                    "missing-perl-for-test",
+                    "--fail-on",
+                    "never",
+                ]
+            )
+
+        report = json.loads(output)
+        findings = [
+            finding for finding in report["findings"] if finding["check"] == "dangerous-files"
+        ]
+        self.assertTrue(
+            any(
+                finding["status"] == "FAIL"
+                and "backup.sql" in finding["detail"]
+                and ".git/config" in finding["detail"]
+                and finding["path"] == str(document_root.resolve())
+                for finding in findings
+            )
+        )
+        self.assertTrue(
+            any(
+                finding["status"] == "WARN" and "debug.log" in finding["detail"]
+                for finding in findings
+            )
+        )
+        self.assertTrue(
+            any(
+                finding["status"] == "INFO"
+                and "DocumentRoot" in finding["detail"]
+                and "Movable Type root" in finding["detail"]
                 for finding in findings
             )
         )
