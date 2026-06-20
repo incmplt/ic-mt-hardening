@@ -2,7 +2,7 @@
 
 Movable Type のバージョン、`mt-config.cgi`、プラグイン、テーマ、CGI/設定ファイルのパーミッション、Perl 実行環境をまとめて確認し、Markdown または JSON レポートを出力する CLI ツールです。
 
-対象は同じサーバー上にあるローカルの Movable Type アプリケーションルートです。Python 標準ライブラリのみで動きます。
+対象は同じサーバー上にあるローカルの Movable Type アプリケーションルートです。Movable Type 互換構成の PowerCMS でも、MT 互換ルートとして検査できます。Python 標準ライブラリのみで動きます。
 
 ## 使い方
 
@@ -35,9 +35,16 @@ Perl バイナリを明示する場合:
 ic-mt-hardening /path/to/mt --perl-bin /usr/bin/perl -o report.md
 ```
 
+PowerCMS で検証する場合も、PowerCMS のアプリケーションルートを指定します。
+
+```bash
+ic-mt-hardening /path/to/powercms --format json -o powercms-report.json
+```
+
 ## チェック項目
 
 - Movable Type ルート構造の確認
+- PowerCMS らしいファイル/ディレクトリシグナルの検出
 - `lib/MT.pm` または `mt.cgi` からのコアバージョン読み取り
 - `mt-config.cgi` の主要設定確認
 - `CGIPath` の HTTPS 利用確認
@@ -46,6 +53,7 @@ ic-mt-hardening /path/to/mt --perl-bin /usr/bin/perl -o report.md
 - データベース接続設定の存在確認
 - `TempDir` がアプリケーションルート配下にないかの確認
 - `plugins/` 配下のプラグイン検出
+- `mt-config.cgi` の `PluginSwitch` によるプラグイン有効/無効状態の確認
 - `themes/` 配下のテーマ検出
 - ローカル JSON DB によるプラグイン/テーマ脆弱性マッチング
 - NVD API による CVE 検索（明示指定時のみ）
@@ -117,6 +125,8 @@ ic-mt-hardening /path/to/mt --format json -o report.json
 ```
 
 JSON には `summary` と `findings` が含まれます。各 finding には `check`, `status`, `message`, `detail`, `path`, `remediation`, `evidence`, `source` が入ります。
+
+PowerCMS 互換検証では、`platform` と `plugin-activation` の finding を確認してください。`PluginSwitch` が設定されていないプラグインは、設定ファイル上では無効化されていないものとして `INFO` になります。
 
 ## DocumentRoot の危険ファイル検出
 

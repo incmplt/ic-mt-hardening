@@ -121,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
         return exit_code(args.fail_on, findings)
 
     core_version = read_movable_type_version(root)
+    findings.extend(check_platform(root))
     findings.extend(check_core_version(root, core_version))
 
     config_path = args.mt_config.resolve() if args.mt_config else find_mt_config(root)
@@ -129,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     plugins = discover_extensions(root / "plugins", "plugin")
     themes = discover_extensions(root / "themes", "theme")
     findings.extend(check_extensions(plugins, "plugin", args.vuln_db))
+    findings.extend(check_plugin_activation(plugins, config_path))
     findings.extend(check_extensions(themes, "theme", args.vuln_db))
 
     if args.cve_check:
@@ -353,6 +355,51 @@ def check_core_version(root: Path, version: str) -> list[Finding]:
             path=str(version_file),
         )
     ]
+
+
+def check_platform(root: Path) -> list[Finding]:
+    signals = find_powercms_signals(root)
+    if signals:
+        return [
+            Finding(
+                "platform",
+                "INFO",
+                "PowerCMS-compatible Movable Type installation signal was detected.",
+                "\n".join(signals),
+                path=str(root),
+            )
+        ]
+    return [
+        Finding(
+            "platform",
+            "INFO",
+            "No PowerCMS-specific signal was detected; treating target as Movable Type-compatible.",
+            path=str(root),
+        )
+    ]
+
+
+def find_powercms_signals(root: Path) -> list[str]:
+    search_roots = [
+        root / "plugins",
+        root / "addons",
+        root / "lib",
+        root / "mt-static" / "plugins",
+    ]
+    signals: list[str] = []
+    for base in search_roots:
+        if not base.exists() or not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*")):
+            try:
+                relative = path.relative_to(root).as_posix()
+            except ValueError:
+                continue
+            if "powercms" in relative.lower():
+                signals.append(relative + ("/" if path.is_dir() else ""))
+            if len(signals) >= 10:
+                return signals
+    return signals
 
 
 def read_movable_type_version(root: Path) -> str:
@@ -674,6 +721,89 @@ def check_extensions(extensions: list[Extension], kind: str, vuln_db_path: Path 
     if vuln_db_path:
         findings.extend(check_vulnerability_db(extensions, vuln_db_path, kind))
     return findings
+
+
+def check_plugin_activation(plugins: list[Extension], config_path: Path | None) -> list[Finding]:
+    if not plugins:
+        return []
+    if config_path is None:
+        return [
+            Finding(
+                "plugin-activation",
+                "WARN",
+                "Plugin activation state could not be checked because mt-config.cgi was not found.",
+            )
+        ]
+
+    values = parse_mt_config_file(config_path)
+    switches = parse_plugin_switches(values)
+    if not switches:
+        return [
+            Finding(
+                "plugin-activation",
+                "INFO",
+                "No PluginSwitch entries were found; detected plugins are not disabled in mt-config.cgi.",
+                path=str(config_path),
+            )
+        ]
+
+    findings: list[Finding] = []
+    for plugin in plugins:
+        state = plugin_switch_state(plugin, switches)
+        if state == "off":
+            findings.append(
+                Finding(
+                    "plugin-activation",
+                    "WARN",
+                    f"{plugin.name} appears to be disabled by PluginSwitch.",
+                    path=str(plugin.path),
+                    remediation="Confirm whether this plugin should be enabled for the target site.",
+                )
+            )
+        elif state == "on":
+            findings.append(
+                Finding(
+                    "plugin-activation",
+                    "PASS",
+                    f"{plugin.name} is enabled by PluginSwitch.",
+                    path=str(plugin.path),
+                )
+            )
+        else:
+            findings.append(
+                Finding(
+                    "plugin-activation",
+                    "INFO",
+                    f"{plugin.name} has no PluginSwitch override.",
+                    path=str(plugin.path),
+                )
+            )
+    return findings
+
+
+def parse_plugin_switches(values: dict[str, list[str]]) -> dict[str, str]:
+    switches: dict[str, str] = {}
+    for entry in values.get("pluginswitch", []):
+        parts = entry.split()
+        if len(parts) < 2:
+            continue
+        plugin_name = " ".join(parts[:-1])
+        state = normalize_bool(parts[-1])
+        if state in {"on", "off"}:
+            switches[normalize_slug(plugin_name)] = state
+    return switches
+
+
+def plugin_switch_state(plugin: Extension, switches: dict[str, str]) -> str:
+    candidates = {
+        normalize_slug(plugin.slug),
+        normalize_slug(plugin.name),
+        normalize_slug(plugin.path.name),
+    }
+    for candidate in candidates:
+        if candidate in switches:
+            return switches[candidate]
+    return ""
 
 
 def check_vulnerability_db(

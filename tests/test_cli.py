@@ -32,10 +32,12 @@ class CliTests(unittest.TestCase):
         checks = {finding["check"] for finding in report["findings"]}
         self.assertEqual(report["tool"]["name"], "ic-mt-hardening")
         self.assertIn("mt-root", checks)
+        self.assertIn("platform", checks)
         self.assertIn("core-version", checks)
         self.assertIn("mt-config", checks)
         self.assertIn("plugins", checks)
         self.assertIn("plugin-inventory", checks)
+        self.assertIn("plugin-activation", checks)
         self.assertIn("themes", checks)
         self.assertIn("theme-inventory", checks)
         self.assertIn("cgi-permissions", checks)
@@ -267,6 +269,64 @@ class CliTests(unittest.TestCase):
                 finding["check"] == "cve"
                 and finding["source"] == "nvd:cpe"
                 and "CVE-2024-0001" in finding["message"]
+                for finding in findings
+            )
+        )
+
+    def test_powercms_compatible_fixture_reports_platform_and_plugin_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_movable_type_fixture(Path(tmp))
+            powercms = root / "plugins" / "PowerCMS"
+            disabled = root / "plugins" / "DisabledPlugin"
+            powercms.mkdir()
+            disabled.mkdir()
+            (powercms / "config.yaml").write_text(
+                "id: powercms\nname: PowerCMS\nversion: 6.5.0\n",
+                encoding="utf-8",
+            )
+            (disabled / "config.yaml").write_text(
+                "id: disabled-plugin\nname: Disabled Plugin\nversion: 1.0.0\n",
+                encoding="utf-8",
+            )
+            with (root / "mt-config.cgi").open("a", encoding="utf-8") as handle:
+                handle.write("PluginSwitch PowerCMS 1\n")
+                handle.write("PluginSwitch DisabledPlugin 0\n")
+
+            output = run_cli_capture(
+                [
+                    str(root),
+                    "--format",
+                    "json",
+                    "--perl-bin",
+                    "missing-perl-for-test",
+                    "--fail-on",
+                    "never",
+                ]
+            )
+
+        report = json.loads(output)
+        findings = report["findings"]
+        self.assertTrue(
+            any(
+                finding["check"] == "platform"
+                and "PowerCMS-compatible" in finding["message"]
+                and "plugins/PowerCMS/" in finding["detail"]
+                for finding in findings
+            )
+        )
+        self.assertTrue(
+            any(
+                finding["check"] == "plugin-activation"
+                and finding["status"] == "PASS"
+                and finding["message"] == "PowerCMS is enabled by PluginSwitch."
+                for finding in findings
+            )
+        )
+        self.assertTrue(
+            any(
+                finding["check"] == "plugin-activation"
+                and finding["status"] == "WARN"
+                and finding["message"] == "Disabled Plugin appears to be disabled by PluginSwitch."
                 for finding in findings
             )
         )

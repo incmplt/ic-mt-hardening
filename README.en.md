@@ -2,7 +2,7 @@
 
 A CLI tool that checks Movable Type version, `mt-config.cgi`, plugins, themes, CGI/config file permissions, and the Perl runtime, then outputs a Markdown or JSON report.
 
-The target is a local Movable Type application root on the same server. The tool runs with the Python standard library only.
+The target is a local Movable Type application root on the same server. PowerCMS installations with a Movable Type-compatible layout can also be checked as MT-compatible roots. The tool runs with the Python standard library only.
 
 ## Usage
 
@@ -35,9 +35,16 @@ To specify a Perl binary:
 ic-mt-hardening /path/to/mt --perl-bin /usr/bin/perl -o report.md
 ```
 
+For PowerCMS validation, pass the PowerCMS application root.
+
+```bash
+ic-mt-hardening /path/to/powercms --format json -o powercms-report.json
+```
+
 ## Checks
 
 - Movable Type root structure detection
+- PowerCMS-like file/directory signal detection
 - Core version detection from `lib/MT.pm` or `mt.cgi`
 - Key `mt-config.cgi` setting checks
 - HTTPS check for `CGIPath`
@@ -46,6 +53,7 @@ ic-mt-hardening /path/to/mt --perl-bin /usr/bin/perl -o report.md
 - Database connection setting presence
 - `TempDir` placement check
 - Plugin detection under `plugins/`
+- Plugin enabled/disabled state checks from `PluginSwitch` entries in `mt-config.cgi`
 - Theme detection under `themes/`
 - Plugin/theme vulnerability matching with a local JSON database
 - CVE search through the NVD API when explicitly enabled
@@ -117,6 +125,8 @@ ic-mt-hardening /path/to/mt --format json -o report.json
 ```
 
 The JSON report contains `summary` and `findings`. Each finding includes `check`, `status`, `message`, `detail`, `path`, `remediation`, `evidence`, and `source`.
+
+For PowerCMS compatibility validation, review the `platform` and `plugin-activation` findings. Plugins without a `PluginSwitch` entry are reported as `INFO` because they are not disabled in the config file.
 
 ## DocumentRoot Dangerous File Detection
 
